@@ -1,0 +1,91 @@
+#!/usr/bin/env node
+// prove-visual — screenshot a UI change in light + dark, desktop + phone, and
+// with every short label tripled, then write a hashed marker that
+// commit-evidence-gate checks on UI commits. Screenshots are for READING:
+// open each PNG before calling the change done, and send the set to the reviewer.
+//
+// Usage:  prove-visual [/route …]        (from inside the repo)
+// Config: <repo>/.claude/visual.json  {"base_url": "http://localhost:3001",
+//                                      "routes": ["/"], "stress": true}
+// Drives a Chrome with remote debugging on PROVE_VISUAL_CDP (default
+// http://127.0.0.1:9222). Start one with
+//   chrome --remote-debugging-port=9222 --user-data-dir=~/.chrome-automation
+// or set PROVE_VISUAL_LAUNCH to a command that starts it. Sign that profile in
+// once and pages behind a login work. Requires Node 22+ (global WebSocket).
+const { execSync } = require('node:child_process');
+const crypto = require('node:crypto');
+const fs = require('node:fs');
+const path = require('node:path');
+
+const CDP = process.env.PROVE_VISUAL_CDP || 'http://127.0.0.1:9222';
+const VIEWPORTS = [[1280, 800], [390, 844]];
+const SCHEMES = ['light', 'dark'];
+// Triple each short text node: catches truncation, wrapping and overflow.
+const STRESS = `(() => { const w = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  for (let n; (n = w.nextNode());) { const t = n.nodeValue.trim(); if (t && t.length < 60) n.nodeValue = t + ' ' + t + ' ' + t; } })()`;
+
+const root = execSync('git rev-parse --show-toplevel').toString().trim();
+const head = execSync('git rev-parse HEAD').toString().trim();
+const cfg = JSON.parse(fs.readFileSync(path.join(root, '.claude/visual.json'), 'utf8'));
+const routes = process.argv.slice(2).length ? process.argv.slice(2) : (cfg.routes || ['/']);
+const outDir = path.join(root, '.claude-visual', head.slice(0, 12));
+
+async function session(url) {
+  const target = await (await fetch(`${CDP}/json/new?about:blank`, { method: 'PUT' })).json();
+  const ws = new WebSocket(target.webSocketDebuggerUrl);
+  await new Promise((ok, fail) => { ws.onopen = ok; ws.onerror = fail; });
+  let id = 0; const waiting = new Map(); const events = [];
+  ws.onmessage = ({ data }) => {
+    const msg = JSON.parse(data);
+    if (msg.id && waiting.has(msg.id)) {
+      const { ok, fail } = waiting.get(msg.id); waiting.delete(msg.id);
+      msg.error ? fail(new Error(`${msg.error.message} (${url})`)) : ok(msg.result);
+    } else if (msg.method) events.push(msg.method);
+  };
+  const send = (method, params = {}) => new Promise((ok, fail) => {
+    waiting.set(++id, { ok, fail }); ws.send(JSON.stringify({ id, method, params }));
+  });
+  const close = async () => { ws.close(); await fetch(`${CDP}/json/close/${target.id}`); };
+  return { send, events, close };
+}
+
+async function shoot(route, [width, height], scheme, stress) {
+  const url = new URL(route, cfg.base_url).href;
+  const s = await session(url);
+  try {
+    await s.send('Page.enable');
+    await s.send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: width < 600 });
+    await s.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: scheme }] });
+    await s.send('Page.navigate', { url });
+    for (let i = 0; i < 100 && !s.events.includes('Page.loadEventFired'); i++) await new Promise(r => setTimeout(r, 100));
+    if (!s.events.includes('Page.loadEventFired')) throw new Error(`no load event after 10s: ${url}`);
+    await new Promise(r => setTimeout(r, 800)); // let client-side rendering settle
+    if (stress) await s.send('Runtime.evaluate', { expression: STRESS });
+    const { data } = await s.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true });
+    const slug = route.replace(/[^a-z0-9]+/gi, '_').replace(/^_|_$/g, '') || 'root';
+    const file = path.join(outDir, `${slug}-${width}-${scheme}${stress ? '-stress' : ''}.png`);
+    fs.writeFileSync(file, Buffer.from(data, 'base64'));
+    return file;
+  } finally { await s.close(); }
+}
+
+(async () => {
+  try { await fetch(`${CDP}/json/version`); } catch {
+    if (!process.env.PROVE_VISUAL_LAUNCH) throw new Error(`no Chrome DevTools endpoint at ${CDP}; start Chrome with --remote-debugging-port or set PROVE_VISUAL_LAUNCH`);
+    execSync(process.env.PROVE_VISUAL_LAUNCH); await new Promise(r => setTimeout(r, 3000));
+  }
+  fs.mkdirSync(outDir, { recursive: true });
+  const files = [];
+  for (const route of routes)
+    for (const vp of VIEWPORTS)
+      for (const scheme of SCHEMES)
+        for (const stress of cfg.stress === false ? [false] : [false, true]) {
+          if (stress && vp[0] < 600) continue; // one stress pass per scheme, desktop only
+          files.push(await shoot(route, vp, scheme, stress));
+        }
+  const marker = { head, at: new Date().toISOString(), base_url: cfg.base_url, routes,
+    files: files.map(f => ({ path: path.relative(root, f), sha256: crypto.createHash('sha256').update(fs.readFileSync(f)).digest('hex') })) };
+  fs.writeFileSync(path.join(root, '.claude-visual/marker.json'), JSON.stringify(marker, null, 2));
+  console.log(files.join('\n'));
+  console.error(`✓ prove-visual: ${files.length} screenshots at ${head.slice(0, 12)}. Read every PNG before calling this done.`);
+})().catch(e => { console.error(`✗ prove-visual: ${e.message}`); process.exit(1); });

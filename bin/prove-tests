@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# prove-tests — run a test command, capture its output, and write a tamper-evident
+# evidence marker (.claude-verified) that the commit-evidence-gate hook checks.
+#
+# The point (Nick Nisi / WorkOS): an agent can `touch .claude-verified` and lie
+# that it ran tests. It cannot fake the SHA-256 of real test output. The hook
+# verifies the marker records a real, passing run — so the only way past the gate
+# is to actually run the tests.
+#
+# Usage:  prove-tests "<test command>"
+#   e.g.  prove-tests "npm test"
+#         prove-tests "pytest -q"
+#         prove-tests npm test        (unquoted args are joined — retro sweep 2026-07-25:
+#                                      `prove-tests npm test` used to run bare `npm`, which
+#                                      printed help and wrote a failing evidence marker)
+set -uo pipefail
+[ $# -ge 1 ] || { echo "usage: prove-tests \"<test command>\"" >&2; exit 2; }
+CMD="$*"
+ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+MARK="$ROOT/.claude-verified"
+LOG=$(mktemp)
+
+echo "▶ prove-tests: $CMD" >&2
+set +e
+eval "$CMD" 2>&1 | tee "$LOG"
+EXIT=${PIPESTATUS[0]}
+set -e 2>/dev/null || true
+
+HASH=$(shasum -a 256 "$LOG" 2>/dev/null | awk '{print $1}')
+[ -z "$HASH" ] && HASH=$(sha256sum "$LOG" 2>/dev/null | awk '{print $1}')
+STAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+jq -nc --arg cmd "$CMD" --argjson exit "$EXIT" --arg sha "$HASH" \
+       --arg at "$STAMP" --arg head "$(git rev-parse HEAD 2>/dev/null || echo none)" \
+       '{cmd:$cmd, exit:$exit, sha256:$sha, at:$at, head:$head}' > "$MARK"
+rm -f "$LOG"
+
+if [ "$EXIT" = "0" ]; then
+  echo "✓ evidence written: $MARK (exit 0, sha ${HASH:0:12}…)" >&2
+else
+  echo "✗ tests failed (exit $EXIT) — evidence records the failure; commit gate will block." >&2
+fi
+# Ensure the marker isn't accidentally committed
+if [ -f "$ROOT/.gitignore" ] && ! grep -qxF '.claude-verified' "$ROOT/.gitignore"; then
+  echo '.claude-verified' >> "$ROOT/.gitignore"
+fi
+exit "$EXIT"

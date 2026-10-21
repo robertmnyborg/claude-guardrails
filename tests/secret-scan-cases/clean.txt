@@ -1,0 +1,11 @@
+env | grep -i cmux | sed 's/PASSWORD=.*/PASSWORD=***/'
+sed -E 's/(token=)[^&]+/\1REDACTED/' log.txt
+perl -pi -e "s/\`password=os\.environ\['PROD_DB_PASSWORD'\]\`/x/" f
+password=os.environ['PROD_DB_PASSWORD']
+max_tokens=4096000000
+api_key = self.api_key_from_config
+cat local-env.sh | sed 's/\(TOKEN=\).*/\1***/' | head -20
+grep -cE "^SECRET_KEY_BASE=[0-9a-f]{128}$|^POSTGRES_PASSWORD=[0-9a-f]{48}$" .env
+export APP_DB_URL="postgresql://$USER:local@localhost:5432/app"
+s.replace('SLACK_BOT_TOKEN=','GITHUB_TOKEN=@GITHUB_TOKEN',1)
+  it is not in `env-manifest`, because the scanner flags `GITHUB_TOKEN=@GITHUB_TOKEN` lines
