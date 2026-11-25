@@ -100,6 +100,8 @@ Repos that use husky set a local `core.hooksPath`, which hides the global hook. 
 
 Blocks `git commit` unless the repo has a `.claude-verified` marker that is under 120 minutes old and records exit 0 and a SHA-256 of real test output. `prove-tests "<cmd>"` runs the tests and writes that marker. The model can still claim tests passed, but the commit stays blocked until `prove-tests` writes a passing run. (Idea from Nick Nisi's WorkOS talk on replacing trust with evidence.)
 
+Commits that change only `.md` or `.txt` files skip the test check: every staged, unstaged, and untracked path must be docs, so one code file anywhere in the tree keeps the gate on. In one week, 9 of about 25 blocks were docs appends, each costing a turn and a full test run.
+
 Escape hatch for repos with no tests: `git commit --no-verify`, stated in the message.
 
 Fixes the header records:

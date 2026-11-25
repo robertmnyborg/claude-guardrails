@@ -69,6 +69,16 @@ printf '%s' "$CMD" | grep -qE '\-\-amend|--no-verify' && exit 0
 MARK="$ROOT/.claude-verified"
 STALE_MIN="${CLAUDE_COMMIT_GATE_STALE_MIN:-120}"   # evidence older than this many minutes is stale
 
+# Docs-only commits need no test run (sweep 2026-11-14: 9 of ~25 blocks that week were
+# CONTEXT.md / README / CLAUDE.md appends, each costing a turn plus a full test run).
+# Conservative: every path git could commit (staged, unstaged, untracked) must be
+# .md/.txt, so a code file anywhere in the tree keeps the gate on.
+CHANGED=$(git -C "$ROOT" status --porcelain --untracked-files=all 2>/dev/null | cut -c4- | sed 's/.* -> //')
+if [ -n "$CHANGED" ] && ! printf '%s\n' "$CHANGED" | grep -qvE '\.(md|txt)"?$'; then
+  printf '%s\tdocs-only\t%s\n' "$(date -u +%FT%TZ)" "$ROOT" >> "$GLOG"
+  exit 0
+fi
+
 emit() {  # $1=decision(allow|block) $2=reason
   if [ "$1" = "block" ] && [ "$MODE" = "block" ]; then
     jq -nc --arg r "$2" '{decision:"block", reason:$r}'
