@@ -11,7 +11,7 @@ Each hook here started as a prose rule that failed, and each one has a dated not
 | `sleep-poll-guard.sh` | PreToolUse Bash | blocks `sleep N; cmd` for N >= 10 | 48 sleeps, ~7.9 h in one session; 138 to 1 per week |
 | `secret-command-guard.sh` | PreToolUse Bash | blocks commands with a literal credential | three secret leaks before it shipped |
 | `push-secret-gate.sh` + `git/pre-push` | PreToolUse Bash, git | blocks `git push` of commits holding a secret | the earlier scan missed punctuation-heavy passwords |
-| `commit-evidence-gate.sh` | PreToolUse Bash | blocks `git commit` without a hashed passing test run | "tests pass" was a claim, not evidence |
+| `commit-evidence-gate.sh` | PreToolUse Bash | blocks `git commit` without a hashed passing test run or a `Deviations:` line | "tests pass" was a claim, not evidence |
 | `handoff-guard.py` | Stop | blocks once when a reply hands the user a free lookup | 163 fires in its first 5 weeks |
 | `session-age-guard.sh` | UserPromptSubmit | tells the model to warn the user about context size | 3 sessions ran 2.7 to 4.8 more days after a silent warning |
 | `skill-router.sh` | PreToolUse Write/Edit | injects a skill nudge on a file-path match | one skill fired 0 times in 90 days on its description alone |
@@ -63,6 +63,7 @@ Skip any hook you do not want. Each one is independent, except that the two secr
 | `SLEEP_GUARD_MIN_SECS` | `10` | sleep-poll-guard |
 | `CLAUDE_COMMIT_GATE` | `block` (`warn`, `off`) | commit-evidence-gate |
 | `CLAUDE_COMMIT_GATE_STALE_MIN` | `120` | commit-evidence-gate |
+| `COMMIT_GATE_LOG` | `~/.claude/hooks/commit-gate.log` | commit-evidence-gate |
 | `CLAUDE_VISUAL_GATE` | `warn` (`block`, `off`) | commit-evidence-gate |
 | `VISUAL_GATE_LOG` | `~/.claude/hooks/visual-gate.log` | commit-evidence-gate |
 | `HANDOFF_GUARD_LOG` | `~/.claude/hooks/handoff-guard.log` | handoff-guard |
@@ -105,6 +106,8 @@ Fixes the header records:
 - The stale-evidence message now includes the last proven command, because rediscovering it cost one extra turn in 8 sessions in one week.
 - The message says to run `prove-tests` as its own call. `prove-tests ... && git commit` is blocked too, because the hook checks the marker before the command runs.
 - The hook resolves the target repo from `cd <dir> &&` or `git -C <dir>`. Before this fix, a commit in one repo was checked against another repo's 166-minute-old marker.
+
+**Deviation line.** Every commit message must carry a `Deviations:` line: `Deviations: none`, or each departure from the plan (scope cut, approach change, shortcut, deferral) with why. An agent that hits friction often switches approach or cuts scope and still reports "done"; the line makes it say so in the commit. The check also runs on `--no-verify` commits, reads messages from `-m` or `-F`, and skips commits whose message it cannot see (editor, `--amend --no-edit`). Each decision, with the deviation text, goes to `COMMIT_GATE_LOG`, so you can see whether the line ever names a real deviation. (Idea from the deviation log in [goose-deuce](https://github.com/SnoobieJunes/goose-deuce).)
 
 **Visual check (opt-in).** In a repo with `.claude/visual.json`, a commit that touches `.tsx/.jsx/.css/.scss/.vue/.html` also needs fresh screenshots from `prove-visual`. `prove-visual` captures light and dark themes at 1280 and 390 px wide, plus a pass with every short label tripled, and writes a hashed marker tied to `HEAD`. The check warns by default. `[no-visual]` in the commit message skips it for type-only edits.
 

@@ -1,11 +1,11 @@
 #!/bin/bash
 # Visual check in commit-evidence-gate: warn/block/escape/opt-in/freshness.
 H="$(cd "$(dirname "$0")/.." && pwd)/hooks/commit-evidence-gate.sh"
-T=$(mktemp -d); export VISUAL_GATE_LOG="$T/visual-gate.log"; cd "$T" && git init -q && git -c commit.gpgsign=false -c user.name=t -c user.email=t@example.com commit -q --allow-empty -m init
+T=$(mktemp -d "${TMPDIR:-/tmp}/cegate.XXXXXX"); export VISUAL_GATE_LOG="$T/visual-gate.log" COMMIT_GATE_LOG="$T/commit-gate.log"; cd "$T" && git init -q && git -c commit.gpgsign=false -c user.name=t -c user.email=t@example.com commit -q --allow-empty -m init
 echo '{"cmd":"true","exit":0,"sha256":"x"}' > .claude-verified       # fresh passing test evidence
 mkdir -p .claude && echo '{"base_url":"http://x"}' > .claude/visual.json
 echo 'x' > App.tsx && git add App.tsx
-run() { printf '{"tool_input":{"command":"git commit -m \\"%s\\""}}' "$1" | CLAUDE_VISUAL_GATE=$2 bash "$H" 2>&1; }
+run() { printf '{"tool_input":{"command":"git commit -m \\"%s\\" -m \\"Deviations: none\\""}}' "$1" | CLAUDE_VISUAL_GATE=$2 bash "$H" 2>&1; }
 run msg warn  | grep -q 'visual evidence is missing' && echo "ok  warn mode reports missing" || echo "FAIL warn"
 run msg block | grep -q '"block"'                    && echo "ok  block mode blocks"        || echo "FAIL block"
 out=$(run '[no-visual] types' block); [ -z "$out" ]  && echo "ok  [no-visual] escapes"     || echo "FAIL escape"

@@ -24,7 +24,6 @@ PAYLOAD=$(cat)
 CMD=$(printf '%s' "$PAYLOAD" | jq -r '.tool_input.command // empty' 2>/dev/null)
 # only care about real commits (ignore commit --amend metadata-only, -h, etc.)
 printf '%s' "$CMD" | grep -qE '(^|[;&|[:space:]])git[[:space:]]+(-[^[:space:]]+[[:space:]]+)*commit\b' || exit 0
-printf '%s' "$CMD" | grep -qE '\-\-amend|--no-verify' && exit 0
 
 # The commit may target another repo: `cd <dir> && git ...` or `git -C <dir> ...`.
 # Resolve the root from that dir, not the session cwd (2026-10-06: a commit in
@@ -33,6 +32,40 @@ DIR=$(printf '%s' "$CMD" | sed -nE 's/.*git[[:space:]]+-C[[:space:]]+([^[:space:
 [ -z "$DIR" ] && DIR=$(printf '%s' "$CMD" | sed -nE 's/^[[:space:]]*cd[[:space:]]+([^[:space:];&|]+).*/\1/p')
 DIR="${DIR/#\~/$HOME}"
 ROOT=$(git -C "${DIR:-.}" rev-parse --show-toplevel 2>/dev/null) || exit 0
+
+# Deviation line (2026-11-24; idea from goose-deuce's deviation log,
+# https://github.com/SnoobieJunes/goose-deuce). The commit message must carry a
+# `Deviations:` line: `Deviations: none`, or what departed from the plan (scope cut,
+# approach change, shortcut, deferral) and why. Runs before the --amend/--no-verify
+# escape, so a test-less commit still states its deviations. Skips commits whose
+# message this hook cannot read (editor, --no-edit, -C/-c reuse).
+# Guardrail: refuses a commit with no line (false pass = a silent deviation) and
+# accepts that a bare "Deviations: none" can still lie; a false block costs one
+# message rewrite. Every decision goes to COMMIT_GATE_LOG. Kill condition: drop it
+# if, after a month, no logged commit names a real deviation.
+MSG=""
+if printf '%s' "$CMD" | grep -qE '(^|[[:space:]])(-[a-zA-Z]*m|--message)([[:space:]=]|$)'; then
+  MSG="$CMD"
+else
+  MF=$(printf '%s' "$CMD" | sed -nE 's/.*[[:space:]](-F|--file)[[:space:]=]+([^[:space:];&|]+).*/\2/p')
+  MF="${MF/#\~/$HOME}"
+  [ -n "$MF" ] && [ "${MF#/}" = "$MF" ] && MF="${DIR:-$PWD}/$MF"
+  [ -n "$MF" ] && [ -f "$MF" ] && MSG=$(cat "$MF")
+fi
+GLOG="${COMMIT_GATE_LOG:-$HOME/.claude/hooks/commit-gate.log}"
+if [ -z "$MSG" ]; then
+  printf '%s\tdeviation-unreadable\t%s\n' "$(date -u +%FT%TZ)" "$ROOT" >> "$GLOG"
+elif printf '%s' "$MSG" | grep -qE "Deviations:[[:space:]]*[^[:space:]\"']"; then
+  DEV=$(printf '%s' "$MSG" | grep -oE "Deviations:[^\"'\$]*" | head -1 | cut -c1-120)
+  printf '%s\tdeviation-ok\t%s\t%s\n' "$(date -u +%FT%TZ)" "$ROOT" "$DEV" >> "$GLOG"
+else
+  printf '%s\tdeviation-missing\t%s\n' "$(date -u +%FT%TZ)" "$ROOT" >> "$GLOG"
+  R="Commit message has no \`Deviations:\` line. Add one to the body: \`Deviations: none\`, or each departure from the plan (scope cut, approach change, shortcut, deferral) with why, plus the follow-up task for anything deferred."
+  if [ "$MODE" = "block" ]; then jq -nc --arg r "$R" '{decision:"block", reason:$r}'; exit 0; fi
+  printf '⚠ commit-evidence-gate: %s\n' "$R" >&2
+fi
+
+printf '%s' "$CMD" | grep -qE '\-\-amend|--no-verify' && exit 0
 MARK="$ROOT/.claude-verified"
 STALE_MIN="${CLAUDE_COMMIT_GATE_STALE_MIN:-120}"   # evidence older than this many minutes is stale
 
