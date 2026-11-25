@@ -13,6 +13,7 @@ Each hook here started as a prose rule that failed, and each one has a dated not
 | `push-secret-gate.sh` + `git/pre-push` | PreToolUse Bash, git | blocks `git push` of commits holding a secret | the earlier scan missed punctuation-heavy passwords |
 | `commit-evidence-gate.sh` | PreToolUse Bash | blocks `git commit` without a hashed passing test run or a `Deviations:` line | "tests pass" was a claim, not evidence |
 | `handoff-guard.py` | Stop | blocks once when a reply hands the user a free lookup | 163 fires in its first 5 weeks |
+| `context-checkpoint-guard.py` | Stop | blocks once per project per session when project files changed but its `CONTEXT.md` did not | 59 of 166 project folders had no `CONTEXT.md` |
 | `session-age-guard.sh` | UserPromptSubmit | tells the model to warn the user about context size | 3 sessions ran 2.7 to 4.8 more days after a silent warning |
 | `skill-router.sh` | PreToolUse Write/Edit | injects a skill nudge on a file-path match | one skill fired 0 times in 90 days on its description alone |
 
@@ -48,7 +49,8 @@ Skip any hook you do not want. Each one is independent, except that the two secr
       { "hooks": [{ "type": "command", "command": "bash $HOME/.claude/hooks/session-age-guard.sh" }] }
     ],
     "Stop": [
-      { "hooks": [{ "type": "command", "command": "python3 $HOME/.claude/hooks/handoff-guard.py", "timeout": 10 }] }
+      { "hooks": [{ "type": "command", "command": "python3 $HOME/.claude/hooks/handoff-guard.py", "timeout": 10 }] },
+      { "hooks": [{ "type": "command", "command": "python3 $HOME/.claude/hooks/context-checkpoint-guard.py", "timeout": 10 }] }
     ]
   }
 }
@@ -67,6 +69,7 @@ Skip any hook you do not want. Each one is independent, except that the two secr
 | `CLAUDE_VISUAL_GATE` | `warn` (`block`, `off`) | commit-evidence-gate |
 | `VISUAL_GATE_LOG` | `~/.claude/hooks/visual-gate.log` | commit-evidence-gate |
 | `HANDOFF_GUARD_LOG` | `~/.claude/hooks/handoff-guard.log` | handoff-guard |
+| `CHECKPOINT_ROOT` / `CHECKPOINT_FILE` / `CHECKPOINT_SKIP` / `CHECKPOINT_LOG` | `~/Projects` / `CONTEXT.md` / none / `~/.claude/hooks/context-checkpoint-guard.log` | context-checkpoint-guard |
 | `SESSION_GUARD_SIZE_MB` / `_NOTIFY_MB` / `_REWARN_HOURS` | `3` / `8` / `6` | session-age-guard |
 | `PROVE_VISUAL_CDP` / `PROVE_VISUAL_LAUNCH` | `http://127.0.0.1:9222` / unset | prove-visual |
 
@@ -122,6 +125,12 @@ Fixes the header records:
 A Stop hook. If the last 600 characters of the reply hand the user a step ("Next action:", "reply X and I'll...", "want me to ...?"), it blocks the stop once. The block tells the model to run the step if it is read-only, free, and under 10 minutes, and otherwise to stop without more output. `stop_hook_active` prevents a loop.
 
 Failure: CLAUDE.md said free lookups are never a question for the user, and replies still ended with "say 'check X' and I'll look", which handed the user a 2-minute `git show`. The hook fired 163 times in its first 5 weeks. Each fire goes to a log so you can measure false positives. The fires have not been hand-labeled yet, so its precision is unmeasured.
+
+### context-checkpoint-guard
+
+A Stop hook. It reads the session transcript for Write, Edit, MultiEdit and NotebookEdit calls under `CHECKPOINT_ROOT`. If a project folder got changes but its `CONTEXT.md` did not, it blocks the stop once for that project and asks for a short dated entry: state, what it waits on, next step. A `CONTEXT.md` changed by a shell command after the session started also counts. It fires once per project per session, and tells the model to skip the update when the change was trivial.
+
+Failure: CLAUDE.md said every project folder keeps a `CONTEXT.md` updated after significant steps. A count on 2026-11-24 found 59 of 166 project folders with none and 41 more untouched for 30 days, so a session that died mid-task left only its transcript. Hosted agent platforms solve the same problem by checkpointing session state outside the sandbox; this is the local version. Fires go to a log. Its false-positive rate is unmeasured so far.
 
 ### session-age-guard
 
